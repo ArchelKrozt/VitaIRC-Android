@@ -300,10 +300,10 @@ fun SettingsScreen() {
             }
 
             Section(t("Acerca de"))
-            Row2(t("Buscar actualizaciones"), update?.let { t("¡%s disponible! Pulsa para abrir la página").format(it.tag) }
+            Row2(t("Buscar actualizaciones"), update?.let { t("¡%s disponible! Pulsa para actualizar").format(it.tag) }
                 ?: t("automático: %s  ·  pulsa para buscar ahora").format(if (Config.updateCheck) t("Sí") else "No")) {
                 val u = update
-                if (u != null) Actions.browser(u.url) else { AppEvents.toast(t("Buscando actualizaciones...")); Updates.check(true) }
+                if (u != null) Updates.install(u) else { AppEvents.toast(t("Buscando actualizaciones...")); Updates.check(true) }
             }
             Toggle(t("Buscar actualizaciones automáticamente"), Config.updateCheck) { Config.updateCheck = it; changed() }
             Row2(t("Acerca de"), t("VitaIRC %s  ·  código abierto").format(BuildConfig.VERSION_NAME + " Android")) { Actions.browser("https://github.com/${Config.UPDATE_REPO}") }

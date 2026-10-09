@@ -44,8 +44,9 @@ jobs:
           name: VitaIRC-Android
           path: dist/VitaIRC.apk
 
+      # only with the release key: an APK signed with another key would not install over the last one
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && env.VITAIRC_KEYSTORE != ''
         uses: softprops/action-gh-release@v2
         with:
           files: dist/VitaIRC.apk

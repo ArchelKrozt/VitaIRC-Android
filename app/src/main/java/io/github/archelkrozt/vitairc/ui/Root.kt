@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -78,6 +79,15 @@ fun AppRoot() {
                 Snackbar(containerColor = Color(0xF0222234), contentColor = C.text, shape = RoundedCornerShape(8.dp)) { Text(d.visuals.message, maxLines = 3) }
             }
             Nav.dialog?.let { DialogHost(it) }
+            val upd by AppEvents.update.collectAsState()
+            var asked by rememberSaveable { mutableStateOf("") }
+            upd?.let { u ->
+                if (asked != u.tag && !Splash.show) AlertDialog(onDismissRequest = { asked = u.tag }, containerColor = C.panel,
+                    title = { Text(t("Nueva versión %s").format(u.tag)) },
+                    text = { Text(t("Hay una versión nueva de VitaIRC. Se descarga y Android te pedirá confirmar la instalación; tus servidores, ajustes e historial se conservan.")) },
+                    confirmButton = { TextButton({ asked = u.tag; io.github.archelkrozt.vitairc.net.Updates.install(u) }) { Text(t("Actualizar")) } },
+                    dismissButton = { TextButton({ asked = u.tag }) { Text(t("Más tarde")) } })
+            }
             if (Splash.show) SplashScreen()
         }
     }

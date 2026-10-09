@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 /** Link (or error) of an upload, to put into the input of a window. */
 class UploadResult(val sidx: Int, val uid: Long, val ok: Boolean, val text: String)
 
-class UpdateInfo(val tag: String, val url: String)
+class UpdateInfo(val tag: String, val url: String, val apk: String = "")
 
 /** Things the background work tells the UI. */
 object AppEvents {

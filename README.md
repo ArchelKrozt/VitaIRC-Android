@@ -98,9 +98,14 @@ VITAIRC_KEYSTORE_PASSWORD=...
 VITAIRC_KEY_ALIAS=vitairc
 ```
 
-Without it the APK is signed with the debug key (fine for testing). The GitHub workflow builds every
-push; for tags (`v1.1`...) it publishes a release, signed with the release key when the repository
-has these secrets: `KEYSTORE_BASE64` (the `.jks` in base64), `KEYSTORE_PASSWORD`.
+Without it the APK is signed with the debug key (fine for testing). The GitHub workflow tests and
+builds every push. It publishes releases for tags (`v1.1`...) only when the repository has the key as
+secrets (`KEYSTORE_BASE64`, the `.jks` in base64, and `KEYSTORE_PASSWORD`); otherwise releases are
+made by hand with an APK built by `build.sh`.
+
+The app finds new releases on its own: it downloads the release's `.apk` and opens Android's
+installer, so every release needs the APK attached and a higher version (`versionName` in
+`app/build.gradle.kts` and the tag).
 
 ## Code
 

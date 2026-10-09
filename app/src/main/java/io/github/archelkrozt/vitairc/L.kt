@@ -4,7 +4,7 @@ package io.github.archelkrozt.vitairc
 object L {
     @Volatile var english = false
     fun t(es: String): String = if (english) en[es] ?: es else es
-    private val en: Map<String, String> = HashMap<String, String>(942).apply {
+    private val en: Map<String, String> = HashMap<String, String>(956).apply {
         put("» traduciendo...", "» translating...")
         put("▼ mensajes nuevos abajo", "▼ new messages below")
         put("Sin mensajes todavía.", "No messages yet.")
@@ -150,7 +150,7 @@ object L {
         put("Esperando la lista del servidor...", "Waiting for the server list...")
         put("Conéctate primero al servidor.", "Connect to the server first.")
         put("Unirse", "Join")
-        put("Actualizar", "Refresh")
+        put("Actualizar", "Update")
         put("Subir imagen a Imgur", "Upload image to Imgur")
         put("[carpeta]", "[folder]")
         put("[carpeta] ", "[folder] ")
@@ -474,6 +474,13 @@ object L {
         put("Usuarios: toca un nick para abrir opciones (privado, ignorar y, si eres operador, op, voz, kick y ban).", "Users: tap a nick for its options (PM, ignore and, if you are an operator, op, voice, kick and ban).")
         put("Segundo plano: con \"Seguir conectado en segundo plano\", VitaIRC sigue conectado con la pantalla apagada.", "Background: with \"Stay connected in the background\", VitaIRC stays connected with the screen off.")
         put("Enviar", "Send")
+        put("¡%s disponible! Pulsa para actualizar", "%s available! Tap to update")
+        put("Permite a VitaIRC instalar actualizaciones y vuelve a pulsar Actualizar", "Allow VitaIRC to install updates, then tap Update again")
+        put("Descargando actualización... %d%%", "Downloading update... %d%%")
+        put("No se pudo descargar la actualización: %s", "Could not download the update: %s")
+        put("Nueva versión %s", "New version %s")
+        put("Hay una versión nueva de VitaIRC. Se descarga y Android te pedirá confirmar la instalación; tus servidores, ajustes e historial se conservan.", "There is a new version of VitaIRC. It is downloaded and Android will ask you to confirm the installation; your servers, settings and history are kept.")
+        put("Más tarde", "Later")
         put("versión %s", "version %s")
         put("%d guardados en este dispositivo", "%d saved on this device")
     }

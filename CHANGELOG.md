@@ -14,4 +14,5 @@ First version of VitaIRC for Android, with the features of VitaIRC 1.4 for PS Vi
 - Channel browser with search, user list with operator actions, quick replies, nick completion,
   search in a channel, mute, ignore, highlight words.
 
-Only on Android: background connection with notifications, tablet layout, hardware keyboard support.
+Only on Android: background connection with notifications, tablet layout, hardware keyboard support,
+and updates installed from the app (download + Android's installer).
