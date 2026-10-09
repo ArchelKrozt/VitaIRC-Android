@@ -21,7 +21,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      # the runner image already has the Android SDK (ANDROID_HOME)
 
       - name: Release key
         env:
