@@ -7,6 +7,8 @@ El cliente IRC de <a href="https://github.com/ArchelKrozt/VitaIRC">VitaIRC para 
 Varios servidores, bouncers con historial, traducción, subida de imágenes, vista previa de enlaces y buscador de imágenes.
 </p>
 
+<p align="center">También para <a href="https://github.com/ArchelKrozt/VitaIRC-iOS">iPhone y iPad</a>.</p>
+
 <p align="center"><a href="README.md">English</a> · <b>Español</b></p>
 
 <p align="center">

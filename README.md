@@ -7,6 +7,8 @@ The IRC client from <a href="https://github.com/ArchelKrozt/VitaIRC">VitaIRC for
 Several servers, bouncers with chat history, translation, image uploads, link previews and image search.
 </p>
 
+<p align="center">Also for <a href="https://github.com/ArchelKrozt/VitaIRC-iOS">iPhone and iPad</a>.</p>
+
 <p align="center"><b>English</b> · <a href="README.es.md">Español</a></p>
 
 <p align="center">
