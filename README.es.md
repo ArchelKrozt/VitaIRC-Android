@@ -41,6 +41,11 @@ versiones nuevas una vez al día (Ajustes → *Buscar actualizaciones*).
 - IRCv3 `server-time`, `batch` y `chathistory`: lo que te perdiste llega con su hora real, también los
   privados; los mensajes anteriores se cargan al subir hasta arriba.
 - Reacciones (`+draft/react`) y subidas con `FILEHOST` de soju.
+- **Respuestas citadas** (`+draft/reply`): desliza un mensaje para responder; la cita va arriba.
+- **Tarjetas de usuario**: toca un usuario y aparece su WHOIS y su **perfil VitaIRC** (nombre, bio,
+  foto, favoritos públicos). Tu perfil se guarda en tu teléfono y se envía por IRC a quien lo pida, sin
+  servidores de por medio ([protocolo](docs/PROFILE-PROTOCOL.md)); funciona con la PS Vita y iPhone.
+- Las imágenes del buscador llevan el **nombre del artista**; los videos se ven en una **ventana flotante**.
 
 **Traducción**
 - Google (gratis, sin cuenta) o ChatGPT con tu API key de OpenAI.
