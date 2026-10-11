@@ -37,6 +37,7 @@ sealed class Screen {
     data class Image(val url: String, val page: String, val post: BPost? = null) : Screen()
     data class Video(val url: String, val page: String) : Screen()
     data object Help : Screen()
+    data object MyProfile : Screen()
 }
 
 /** Dialogs any screen can open. */
@@ -82,7 +83,7 @@ object Actions {
         val kind = p?.kind ?: Previews.kindOf(url)
         when {
             kind == LinkKind.IMAGE -> Nav.go(Screen.Image(p?.media?.ifEmpty { null } ?: Previews.imageUrl(url) ?: url, url))
-            kind == LinkKind.VIDEO -> Nav.go(Screen.Video(p?.media?.ifEmpty { null } ?: Previews.videoUrl(url), url))
+            kind == LinkKind.VIDEO -> Social.miniVideo = p?.media?.ifEmpty { null } ?: Previews.videoUrl(url)
             else -> browser(url)
         }
     }

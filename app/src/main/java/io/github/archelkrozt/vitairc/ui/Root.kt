@@ -74,10 +74,13 @@ fun AppRoot() {
                 is Screen.Image -> ImageScreen(sc)
                 is Screen.Video -> VideoScreen(sc)
                 Screen.Help -> HelpScreen()
+                Screen.MyProfile -> MyProfileScreen()
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 56.dp)) { d ->
                 Snackbar(containerColor = Color(0xF0222234), contentColor = C.text, shape = RoundedCornerShape(8.dp)) { Text(d.visuals.message, maxLines = 3) }
             }
+            Social.miniVideo?.let { v -> key(v) { MiniPlayer(v) } }
+            Social.card?.let { (s, n) -> UserCardSheet(s, n, snap.chan) { Social.card = null } }
             Nav.dialog?.let { DialogHost(it) }
             val upd by AppEvents.update.collectAsState()
             var asked by rememberSaveable { mutableStateOf("") }

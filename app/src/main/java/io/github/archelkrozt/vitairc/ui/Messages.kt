@@ -1,6 +1,18 @@
 package io.github.archelkrozt.vitairc.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.automirrored.filled.Reply
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -70,9 +82,18 @@ fun prefixOf(m: MsgUi) = when (m.type) {
     else -> "· "
 }
 
-/** Message text with mIRC colours/bold/underline and tappable links. */
-fun formatText(m: MsgUi, base: Color): AnnotatedString = buildAnnotatedString {
-    val text = m.text
+/** "<image url> 🎨 <artist>": the author goes under the image instead of in the line. */
+fun splitCaption(m: MsgUi): Pair<Int?, String> {
+    if (!Config.linkPreviews) return null to ""
+    val i = m.text.indexOf(" 🎨 ")
+    val u = IrcText.urls(m.text, 1).firstOrNull()
+    if (i < 0 || u == null || (Previews.kindOf(u) != LinkKind.IMAGE && Previews.cached(u)?.kind != LinkKind.IMAGE)) return null to ""
+    return i to "🎨 " + m.text.substring(i + 4)
+}
+
+/** Message text with mIRC colours/bold/underline and tappable links (cut at `upTo`). */
+fun formatText(m: MsgUi, base: Color, upTo: Int? = null): AnnotatedString = buildAnnotatedString {
+    val text = if (upTo != null) m.text.take(upTo) else m.text
     append(text)
     if (Config.ircColors) {
         val spans = m.spans
@@ -128,7 +149,8 @@ fun DateSeparator(ts: Long) {
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
-fun MessageRow(m: MsgUi, flash: Boolean, onTap: () -> Unit, onReact: (String) -> Unit) {
+fun MessageRow(m: MsgUi, flash: Boolean, onTap: () -> Unit, onReact: (String) -> Unit,
+               onReply: (() -> Unit)? = null, onQuote: ((Long) -> Unit)? = null) {
     if (m.type == MsgType.DATE) { DateSeparator(m.ts); return }
     val bg = when {
         flash -> Color(0xFF2A3A5A)
@@ -142,11 +164,28 @@ fun MessageRow(m: MsgUi, flash: Boolean, onTap: () -> Unit, onReact: (String) ->
         else -> C.forType(m.type)
     }
     val textColor = if (m.pending) C.faint else C.forType(m.type)
-    val body = remember(m.id, m.text, m.spans, Config.ircColors, textColor) { formatText(m, textColor) }
+    val cap = remember(m.id, m.text) { splitCaption(m) }
+    val body = remember(m.id, m.text, m.spans, Config.ircColors, textColor) { formatText(m, textColor, cap.first) }
+    // swipe right to reply
+    var drag by remember(m.id) { mutableFloatStateOf(0f) }
+    val haptic = LocalHapticFeedback.current
+    val dragAnim by animateFloatAsState(drag, label = "swipe")
+    Box(Modifier.fillMaxWidth()) {
+    if (dragAnim > 4f) Icon(Icons.AutoMirrored.Filled.Reply, null, tint = C.accent.copy(alpha = (dragAnim / 140f).coerceIn(0f, 1f)),
+        modifier = Modifier.align(Alignment.CenterStart).padding(start = 12.dp))
     Column(
-        Modifier.fillMaxWidth().background(bg).combinedClickable(onClick = onTap, onLongClick = onTap)
+        Modifier.fillMaxWidth().offset { IntOffset(dragAnim.roundToInt(), 0) }.background(bg)
+            .pointerInput(m.id, onReply) {
+                if (onReply == null || !m.chatty || m.pending) return@pointerInput
+                detectHorizontalDragGestures(onDragEnd = {
+                    if (drag > 120f) { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onReply() }
+                    drag = 0f
+                }, onDragCancel = { drag = 0f }) { ch, d -> if (drag + d > 0) { ch.consume(); drag = (drag + d * 0.6f).coerceAtMost(170f) } }
+            }
+            .combinedClickable(onClick = onTap, onLongClick = onTap)
             .padding(horizontal = 10.dp, vertical = 3.dp)
     ) {
+        m.reply?.let { q -> QuoteView(q, Modifier.padding(start = (44 * Config.fontPct / 100).dp, bottom = 2.dp).clickable(enabled = q.id != 0L) { onQuote?.invoke(q.id) }) }
         Row {
             Text(if (m.pending) "···" else m.time, color = C.faint, fontSize = fontSize(12f),
                 modifier = Modifier.width((44 * Config.fontPct / 100).dp).padding(top = 2.dp))
@@ -164,7 +203,7 @@ fun MessageRow(m: MsgUi, flash: Boolean, onTap: () -> Unit, onReact: (String) ->
                 Text("» " + m.trans, color = C.trans, fontSize = fontSize(14f), modifier = indent)
         }
         if (Config.linkPreviews && !m.pending && (m.type == MsgType.MSG || m.type == MsgType.ACTION || m.type == MsgType.NOTICE)) {
-            IrcText.urls(m.text, 1).firstOrNull()?.let { LinkPreviewBlock(it, indent) }
+            IrcText.urls(m.text, 1).firstOrNull()?.let { LinkPreviewBlock(it, indent, cap.second) }
         }
         if (m.reacts.isNotEmpty()) {
             FlowRow(indent.padding(top = 3.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -179,22 +218,44 @@ fun MessageRow(m: MsgUi, flash: Boolean, onTap: () -> Unit, onReact: (String) ->
             }
         }
     }
+    }
+}
+
+/** The message a reply answers, above it */
+@Composable
+fun QuoteView(q: QuoteUi, modifier: Modifier) {
+    Row(modifier.widthIn(max = 420.dp).clip(RoundedCornerShape(8.dp)).background(C.sel.copy(alpha = 0.7f)).height(IntrinsicSize.Min)
+        .padding(vertical = 5.dp, horizontal = 8.dp)) {
+        Box(Modifier.width(3.dp).fillMaxHeight().clip(RoundedCornerShape(2.dp)).background(if (q.nick.isEmpty()) C.faint else C.nick(q.nick)))
+        Column(Modifier.padding(start = 8.dp)) {
+            if (q.nick.isNotEmpty()) Text(q.nick, color = C.nick(q.nick), fontSize = fontSize(12f), fontWeight = FontWeight.SemiBold)
+            Text(q.text, color = C.dim, fontSize = fontSize(13f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
 }
 
 @Composable
-fun LinkPreviewBlock(url: String, modifier: Modifier) {
+fun LinkPreviewBlock(url: String, modifier: Modifier, caption: String = "") {
     val p by produceState<LinkPreview?>(Previews.cached(url), url) { value = Previews.load(url) }
     val pv = p
     if (pv != null && !pv.ok) return
     val shape = RoundedCornerShape(6.dp)
     var broken by remember(url) { mutableStateOf(false) }
     if (pv != null && pv.kind == LinkKind.IMAGE && !broken) {
-        AsyncImage(
-            model = pv.media, contentDescription = null, contentScale = ContentScale.Fit,
-            onError = { broken = true },
-            modifier = modifier.padding(top = 4.dp).heightIn(min = 48.dp, max = 220.dp).widthIn(max = 320.dp).clip(shape)
-                .border(1.dp, C.line, shape).clickable { Actions.openLink(url) },
-        )
+        Column(modifier.padding(top = 4.dp)) {
+            AsyncImage(
+                model = pv.media, contentDescription = null, contentScale = ContentScale.Fit,
+                onError = { broken = true },
+                modifier = Modifier.heightIn(min = 48.dp, max = 220.dp).widthIn(max = 320.dp).clip(shape)
+                    .border(1.dp, C.line, shape).clickable { Actions.openLink(url) },
+            )
+            if (caption.isNotEmpty()) Text(caption, color = C.dim, fontSize = fontSize(13f), maxLines = 2, modifier = Modifier.padding(top = 3.dp))
+        }
+        return
+    }
+    if (pv != null && pv.kind == LinkKind.VIDEO && Previews.isLoop(url)) {
+        // Imgur's GIFs are MP4s: they play in the chat, muted and looping
+        LoopingVideo(pv.media, modifier.padding(top = 4.dp).widthIn(max = 320.dp).height(180.dp).clip(shape).clickable { Actions.openLink(url) })
         return
     }
     val video = pv != null && (pv.kind == LinkKind.VIDEO || pv.videoSite)

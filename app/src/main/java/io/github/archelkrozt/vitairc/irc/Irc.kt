@@ -35,6 +35,13 @@ class Server(val idx: Int, var cfg: ServerCfg) {
     val listed = ArrayList<ListedChan>()
     var listing = 0                              // 1 loading, 2 done
     var listSkip = 0                             // older LIST answers still arriving (dropped)
+    val slowq = ArrayList<String>()              // paced lines (profile answers)
+    var slowBurst = 0
+    var nextSlowAt = 0L
+    val profileAnswered = HashMap<String, Long>()
+    val profileIn = HashMap<String, ProfileBuild>()
+    val whoisPending = HashSet<String>()
+    val whoisBuild = HashMap<String, WhoisInfo>()
     val batches = HashMap<String, Batch>()
     val offq = ArrayList<OfflineMsg>()
     var thread: Thread? = null
@@ -57,6 +64,10 @@ object IrcHooks {
     var notify: (Server, Chan, Msg) -> Unit = { _, _, _ -> }
     var toast: (String) -> Unit = {}
     var beep: () -> Unit = {}
+    /** A profile arrived (null: the user didn't answer) */
+    var profile: (Int, String, Profile?) -> Unit = { _, _, _ -> }
+    /** A WHOIS asked with Irc.whois finished */
+    var whois: (Int, WhoisInfo) -> Unit = { _, _ -> }
 }
 
 /** IRC line: tags, source nick, command and parameters. */
@@ -209,13 +220,14 @@ object Irc {
 
     /** Adds a message to a window (now, or at ts when replaying a log or history). */
     fun addMsgAt(s: Server, c: Chan, type: MsgType, nick: String?, text: String, self: Boolean,
-                 ts: Long = 0, msgid: String? = null, pending: Boolean = false): Msg {
+                 ts: Long = 0, msgid: String? = null, pending: Boolean = false, replyTo: String? = null): Msg {
         val when_ = if (ts > 0) ts else TimeUtil.now()
         if (c.type != ChanType.STATUS && type != MsgType.DATE && TimeUtil.ymd(when_) != c.lastYmd) dateSep(c, when_)
         val f = IrcText.parse(text)
         val body = if (f.text.length > 1000) f.text.substring(0, 1000) else f.text
         val m = Msg(++c.nextId, type, nick ?: "", body, f.spans, self, when_, msgid)
         m.pending = pending
+        m.replyTo = replyTo
         pushMsg(c, m)
         val visible = appVisible && viewSidx == s.idx && viewUid == c.uid
         if (!pending) History.log(s, c, m)
@@ -245,7 +257,8 @@ object Irc {
 
     fun addMsg(s: Server, c: Chan, type: MsgType, nick: String?, text: String, self: Boolean = false, line: Line? = null): Msg {
         val ts = line?.tags?.get("time")?.let { TimeUtil.parseIso(it) } ?: 0L
-        return addMsgAt(s, c, type, nick, text, self, ts, line?.tags?.get("msgid")?.ifEmpty { null })
+        return addMsgAt(s, c, type, nick, text, self, ts, line?.tags?.get("msgid")?.ifEmpty { null },
+            replyTo = line?.tags?.get("+draft/reply")?.ifEmpty { null })
     }
 
     private fun status(s: Server, type: MsgType, text: String) = addMsg(s, s.status, type, null, text)
@@ -322,10 +335,12 @@ object Irc {
         return out
     }
 
-    private fun sendText(s: Server, target: String, c: Chan?, text: String, action: Boolean) {
-        for (chunk in splitText(text)) {
-            sendRaw(s, if (action) "PRIVMSG $target :\u0001ACTION $chunk\u0001" else "PRIVMSG $target :$chunk")
-            if (c != null) addMsg(s, c, if (action) MsgType.ACTION else MsgType.MSG, s.nick, chunk, true)
+    private fun sendText(s: Server, target: String, c: Chan?, text: String, action: Boolean, replyTo: String? = null) {
+        // a reply needs client tags; without them the text already starts with "nick: "
+        val tag = if (replyTo != null && s.capTags) "@+draft/reply=${Line.escape(replyTo)} " else ""
+        for ((i, chunk) in splitText(text).withIndex()) {
+            sendRaw(s, (if (i == 0) tag else "") + if (action) "PRIVMSG $target :\u0001ACTION $chunk\u0001" else "PRIVMSG $target :$chunk")
+            if (c != null) addMsgAt(s, c, if (action) MsgType.ACTION else MsgType.MSG, s.nick, chunk, true, replyTo = if (i == 0) replyTo else null)
         }
     }
 
@@ -365,12 +380,15 @@ object Irc {
         dirty()
     }
 
-    fun sendPrivmsg(sidx: Int, chanUid: Long, text: String) = locked {
+    fun sendPrivmsg(sidx: Int, chanUid: Long, text: String, replyTo: String? = null) = locked {
         val s = servers.getOrNull(sidx) ?: return@locked
         val c = findChanUid(s, chanUid) ?: return@locked
         if (c.type == ChanType.STATUS) return@locked
-        if (s.state != ServerState.ONLINE) queueOffline(s, c, text, false) else sendText(s, c.name, c, text, false)
+        if (s.state != ServerState.ONLINE) queueOffline(s, c, text, false) else sendText(s, c.name, c, text, false, replyTo)
     }
+
+    /** Takes the reply that was waiting for a translated message. */
+    fun takeReplyOut(c: Chan): String? = c.replyOut.also { c.replyOut = null }
 
     private val helpLines = listOf(
         "Comandos disponibles:",
@@ -391,7 +409,8 @@ object Irc {
     }
 
     /** Text typed into a window: a command, or a message. */
-    fun userInput(sidx: Int, chanUid: Long, input: String) = locked {
+    /** replyTo: msgid of the message this one answers (only for plain messages) */
+    fun userInput(sidx: Int, chanUid: Long, input: String, replyTo: String? = null) = locked {
         val text = input.trim()
         if (text.isEmpty()) return@locked
         val s = servers.getOrNull(sidx) ?: return@locked
@@ -402,8 +421,8 @@ object Irc {
             when {
                 c.type == ChanType.STATUS -> addMsg(s, c, MsgType.ERROR, null, t("Esta es la ventana del servidor. Usa /join #canal o /help."))
                 s.state != ServerState.ONLINE -> queueOffline(s, c, body, false)
-                c.transOut && IrcHooks.translationReady() && !IrcText.shouldSkipTranslation(body) -> IrcHooks.translateOut(s, c, body)
-                else -> sendText(s, c.name, c, body, false)
+                c.transOut && IrcHooks.translationReady() && !IrcText.shouldSkipTranslation(body) -> { c.replyOut = replyTo; IrcHooks.translateOut(s, c, body) }
+                else -> sendText(s, c.name, c, body, false, replyTo)
             }
             return@locked
         }
@@ -567,7 +586,8 @@ object Irc {
         val b = historyBatch(s, l) ?: return false
         val f = IrcText.parse(text)
         val ts = l.tags["time"]?.let { TimeUtil.parseIso(it) } ?: TimeUtil.now()
-        b.msgs.add(Msg(0, type, nick, f.text.take(1000), f.spans, isMe(s, nick), ts, l.tags["msgid"]?.ifEmpty { null }))
+        b.msgs.add(Msg(0, type, nick, f.text.take(1000), f.spans, isMe(s, nick), ts, l.tags["msgid"]?.ifEmpty { null })
+            .also { it.replyTo = l.tags["+draft/reply"]?.ifEmpty { null } })
         return true
     }
 
@@ -749,6 +769,7 @@ object Irc {
             "VERSION" -> sendRaw(s, "NOTICE $nick :\u0001VERSION $CTCP_VERSION\u0001")
             "PING" -> sendRaw(s, "NOTICE $nick :\u0001PING $arg\u0001")
             "TIME" -> sendRaw(s, "NOTICE $nick :\u0001TIME ${TimeUtil.hhmm(TimeUtil.now())}\u0001")
+            "VPROFILE" -> answerProfile(s, nick)
         }
     }
 
@@ -776,6 +797,11 @@ object Irc {
                 return
             }
             "NOTICE" -> if (l.p.size >= 2) {
+                val pn = l.nick
+                if (l.p[1].startsWith("\u0001VPROFILE ") && pn != null) {     // a profile answer: never shown, never "flood"
+                    if (!isIgnored(pn) && historyBatch(s, l) == null) profileLine(s, pn, l.p[1].substring(10).substringBefore('\u0001'))
+                    return
+                }
                 val target = stripStatusmsg(l.p[0])
                 val nick = l.nick
                 if (nick != null && (isIgnored(nick) || (isMe(s, target) && s.state == ServerState.ONLINE && !nick.contains('.') && pmFlooding(s, nick)))) return
@@ -1046,13 +1072,27 @@ object Irc {
                 if (num == 904) status(s, MsgType.ERROR, t("Revisa la cuenta y la contraseña en Servidores. Se intentará con NickServ."))
                 sendRaw(s, "CAP END")
             }
-            else -> {
-                // everything else: show the human-readable part
-                val b = l.p.drop(1).joinToString(" ")
-                val toView = (num in 300..399 && num != 353) || num in 400..599
-                addMsg(s, if (toView) replyChan(s) else s.status, if (num >= 400) MsgType.ERROR else MsgType.SERVER, null, b)
-            }
+            311, 312, 313, 317, 319, 330, 338, 378, 671, 301 ->
+                if (l.p.size >= 3 && l.p[1].lowercase() in s.whoisPending) whoisField(s, num, l) else numericText(s, num, l)
+            318 -> if (l.p.size >= 2 && l.p[1].lowercase() in s.whoisPending) {
+                val k = l.p[1].lowercase()
+                s.whoisPending.remove(k)
+                IrcHooks.whois(s.idx, s.whoisBuild.remove(k) ?: WhoisInfo(l.p[1], found = false))
+            } else numericText(s, num, l)
+            401 -> if (l.p.size >= 2 && l.p[1].lowercase() in s.whoisPending) {
+                val k = l.p[1].lowercase()
+                s.whoisPending.remove(k); s.whoisBuild.remove(k)
+                IrcHooks.whois(s.idx, WhoisInfo(l.p[1], found = false))
+            } else numericText(s, num, l)
+            else -> numericText(s, num, l)
         }
+    }
+
+    /** Everything else: show the human-readable part */
+    private fun numericText(s: Server, num: Int, l: Line) {
+        val b = l.p.drop(1).joinToString(" ")
+        val toView = (num in 300..399 && num != 353) || num in 400..599
+        addMsg(s, if (toView) replyChan(s) else s.status, if (num >= 400) MsgType.ERROR else MsgType.SERVER, null, b)
     }
 
     /** ISUPPORT values escape some bytes as \xHH */
@@ -1085,6 +1125,8 @@ object Irc {
         s.capTags = false; s.capBatch = false; s.capHistory = false
         s.historyMax = 0; s.listMask = false; s.filehost = ""
         s.listing = 0; s.listSkip = 0
+        s.slowq.clear(); s.slowBurst = 0
+        s.profileIn.clear(); s.whoisPending.clear(); s.whoisBuild.clear()
         s.batches.clear()
         for (c in s.chans) { c.histReq = HistReq.NONE; c.histEnd = false }
     }
@@ -1135,6 +1177,14 @@ object Irc {
                     val out = locked { ArrayList(s.outq).also { s.outq.clear() } }
                     for (o in out) conn.write(o)
                     val now = TimeUtil.now()
+                    // paced lines: the first few at once, then one every 800 ms
+                    val slow = locked {
+                        if (s.slowq.isEmpty()) { s.slowBurst = 0; null }
+                        else if (s.slowBurst >= 3 && now < s.nextSlowAt) null
+                        else { s.slowBurst++; s.nextSlowAt = now + 800; s.slowq.removeAt(0) }
+                    }
+                    if (slow != null) { conn.write(slow); continue }
+                    locked { profileTimeouts(s, now) }
                     if (s.joinAt != 0L && now >= s.joinAt) { locked { s.joinAt = 0; doAutojoin(s) }; continue }
                     if (s.probe) {
                         s.probe = false
@@ -1230,4 +1280,85 @@ object Irc {
     }
 
     fun anyConnected() = servers.any { it.wantConnect }
+
+    // ------------------------------------------------------------------
+    // Profiles (VPROFILE) and WHOIS cards
+    // ------------------------------------------------------------------
+
+    /** Asks a user for their VitaIRC profile; the answer arrives through IrcHooks.profile. */
+    fun requestProfile(sidx: Int, nick: String) = locked {
+        val s = servers.getOrNull(sidx)
+        if (s == null || s.state != ServerState.ONLINE) { IrcHooks.profile(sidx, nick, null); return@locked }
+        s.profileIn[nick.lowercase()] = ProfileBuild(nick)
+        sendRaw(s, "PRIVMSG $nick :\u0001VPROFILE\u0001")
+    }
+
+    private fun answerProfile(s: Server, nick: String) {
+        val k = nick.lowercase(); val now = TimeUtil.now()
+        val at = s.profileAnswered[k]
+        if (at != null && now - at < 30_000) return
+        if (s.profileAnswered.size > 64) s.profileAnswered.clear()
+        s.profileAnswered[k] = now
+        for (l in MyProfile.answerLines()) if (s.slowq.size < 64) s.slowq.add("NOTICE $nick :\u0001VPROFILE $l\u0001\r\n")
+    }
+
+    private fun profileLine(s: Server, nick: String, body: String) {
+        val k = nick.lowercase()
+        val b = s.profileIn[k] ?: return                // not asked for: dropped
+        val type = body.substringBefore(' ')
+        val data = if (body.contains(' ')) body.substringAfter(' ') else ""
+        when {
+            type == "BEGIN" -> b.started = true
+            type == "NONE" -> { s.profileIn.remove(k); IrcHooks.profile(s.idx, nick, Profile(nick, none = true)) }
+            !b.started -> {}
+            type == "NAME" -> b.name = data.take(MyProfile.MAX_NAME)
+            type == "BIO" -> if (b.bio.length < MyProfile.MAX_BIO + 40) b.bio.append(data)
+            type == "AVATAR" -> if (b.avatarB64.length < 24_000) b.avatarB64.append(data)
+            type == "FAV" -> {
+                val f = data.split(' ')
+                val e = f.getOrNull(0)?.toIntOrNull()
+                if (f.size >= 2 && e != null && e in 0..2 && b.favs.size < MyProfile.MAX_FAVS)
+                    b.favs.add(ProfileFav(e, f[1], f.getOrNull(2)?.takeIf { it != "-" && it.startsWith("https://") } ?: ""))
+            }
+            type == "END" -> {
+                s.profileIn.remove(k)
+                val av = try { java.util.Base64.getDecoder().decode(b.avatarB64.toString()) } catch (e: Exception) { ByteArray(0) }
+                IrcHooks.profile(s.idx, nick, Profile(nick, b.name, b.bio.toString(), av, b.favs.toList()))
+            }
+        }
+    }
+
+    /** No BEGIN after 25 s, or not finished after 60 s: the user doesn't answer. */
+    private fun profileTimeouts(s: Server, now: Long) {
+        val gone = s.profileIn.filter { (_, b) -> (!b.started && now - b.askedAt > 25_000) || now - b.askedAt > 60_000 }
+        for ((k, b) in gone) { s.profileIn.remove(k); IrcHooks.profile(s.idx, b.nick, null) }
+    }
+
+    /** WHOIS shown as a card (its lines don't go to the chat). */
+    fun whois(sidx: Int, nick: String) = locked {
+        val s = servers.getOrNull(sidx) ?: return@locked
+        if (s.state != ServerState.ONLINE) return@locked
+        s.whoisPending.add(nick.lowercase())
+        s.whoisBuild[nick.lowercase()] = WhoisInfo(nick)
+        sendRaw(s, "WHOIS $nick $nick")          // asked twice: the idle time comes from the user's server
+    }
+
+    private fun whoisField(s: Server, num: Int, l: Line) {
+        val k = l.p[1].lowercase()
+        val w = s.whoisBuild[k] ?: WhoisInfo(l.p[1])
+        s.whoisBuild[k] = when (num) {
+            311 -> if (l.p.size >= 6) w.copy(user = l.p[2], host = l.p[3], realname = IrcText.strip(l.last)) else w
+            312 -> w.copy(server = l.p[2], serverInfo = if (l.p.size > 3) l.last else "")
+            313 -> w.copy(oper = true)
+            317 -> w.copy(idleSecs = l.p[2].toIntOrNull() ?: -1, signon = if (l.p.size > 4) (l.p[3].toLongOrNull() ?: 0) * 1000 else 0)
+            319 -> w.copy(channels = w.channels + l.last.split(' ').filter { it.isNotEmpty() })
+            330 -> w.copy(account = l.p[2])
+            // 338 <me> <nick> <ip/host> :actually using host   ·   378 <me> <nick> :is connecting from *@host ip
+            338 -> w.copy(actualHost = if (l.p.size >= 4) l.p[2] else l.last)
+            378 -> w.copy(actualHost = l.last.replace("is connecting from ", ""))
+            671 -> w.copy(secure = true)
+            301 -> w.copy(away = l.last)
+            else -> w
+        }
+    }
 }

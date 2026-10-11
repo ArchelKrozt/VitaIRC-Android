@@ -24,6 +24,7 @@ data class BPost(
     val viewUrl: String,            // sample shown in the viewer
     val fileUrl: String,            // original
     val tags: String,
+    val artist: String = "",            // "" when the service doesn't say
 ) {
     val key get() = "$engine/$id"
 }
@@ -83,6 +84,29 @@ object Booru {
         else -> 'e'
     }
 
+    /** "artist_name" tags -> "artist name, other" ("" when none or only placeholders) */
+    fun artistName(tags: List<String>): String {
+        val skip = setOf("banned_artist", "unknown_artist", "anonymous_artist", "artist_request", "third-party_edit")
+        return tags.filter { it.isNotEmpty() && it !in skip }.take(3).joinToString(", ") { it.replace('_', ' ') }
+    }
+
+    /** The message for the chat: link and, when known, the author ("<url> 🎨 <artist>"). */
+    fun chatText(link: String, p: BPost) = if (p.artist.isEmpty()) link else "$link 🎨 ${p.artist}"
+
+    /** One post by its number (a public favorite of someone else's profile). */
+    fun lookup(engine: Int, id: String): BPost {
+        val safeId = id.filter { it.isLetterOrDigit() }
+        val r = when (engine) {
+            SAFEBOORU -> Http.call("https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&id=$safeId")
+            DANBOORU -> Http.call("https://danbooru.donmai.us/posts/$safeId.json")
+            else -> { skLogin(); Http.call("https://sankakuapi.com/v2/posts/keyset?lang=en&limit=1&tags=" + URLEncoder.encode("id:$safeId", "UTF-8"), skHeaders(), ua = "Mozilla/5.0") }
+        }
+        if (!r.ok) throw HttpError("HTTP ${r.code}")
+        // Danbooru answers one object; the parser reads lists
+        val body = if (engine == DANBOORU) "[" + r.text + "]" else r.text
+        return parse(engine, body, Config.searchAdult).first.firstOrNull() ?: throw HttpError(t("Sin resultados."))
+    }
+
     private fun badExt(e: String) = e.isEmpty() || e in setOf("mp4", "webm", "zip", "swf", "avif")
 
     private fun urlExt(url: String) = url.substringBefore('?').substringBefore('#').substringAfterLast('/', "")
@@ -93,7 +117,7 @@ object Booru {
     fun imageHeaders(engine: Int): Map<String, String> =
         if (engine == SANKAKU) mapOf("Referer" to "https://sankaku.app/", "User-Agent" to "Mozilla/5.0") else emptyMap()
 
-    private fun skHeaders(): Map<String, String> = buildMap {
+    fun skHeaders(): Map<String, String> = buildMap {
         put("Accept", "application/vnd.sankaku.api+json;v=2")
         put("Origin", "https://sankaku.app")
         if (skToken.isNotEmpty()) put("Authorization", skToken)
@@ -101,7 +125,7 @@ object Booru {
 
     /** Logs in when an account is set (the token lasts about an hour). */
     @Synchronized
-    private fun skLogin() {
+    fun skLogin() {
         val user = Config.sankakuUser
         val pass = Config.sankakuPassword
         if (user.isEmpty() || pass.isEmpty()) { skToken = ""; return }
@@ -174,7 +198,8 @@ object Booru {
                     tags = it.optString("tag_string")
                     p = BPost(engine, it.optString("id"), ratingCode(it.optString("rating")), it.optInt("image_width"),
                         it.optInt("image_height"), it.optString("file_ext").lowercase(), it.optLong("file_size"),
-                        it.optString("preview_file_url"), it.optString("large_file_url"), it.optString("file_url"), tags)
+                        it.optString("preview_file_url"), it.optString("large_file_url"), it.optString("file_url"), tags,
+                        artistName(it.optString("tag_string_artist").split(' ')))
                 }
                 else -> {
                     if (it.optBoolean("is_premium") || it.optBoolean("redirect_to_signup")) continue
@@ -183,10 +208,15 @@ object Booru {
                         ta.optJSONObject(k)?.let { o -> o.optString("tagName").ifEmpty { o.optString("name_en").ifEmpty { o.optString("name") } } }
                             ?.takeIf { s -> s.isNotEmpty() }?.replace(' ', '_')
                     }.joinToString(" ")
+                    val artists = (0 until ta.length()).mapNotNull { k ->
+                        ta.optJSONObject(k)?.takeIf { o -> o.optInt("type") == 1 }
+                            ?.let { o -> o.optString("tagName").ifEmpty { o.optString("name_en").ifEmpty { o.optString("name") } } }
+                    }
                     val sample = it.optString("sample_url")
                     val r = it.optString("rating")
                     p = BPost(engine, it.optString("id"), if (r == "s") 'g' else ratingCode(r), it.optInt("width"), it.optInt("height"),
-                        it.optString("file_ext").lowercase(), it.optLong("file_size"), sample, sample, it.optString("file_url"), tags)
+                        it.optString("file_ext").lowercase(), it.optLong("file_size"), sample, sample, it.optString("file_url"), tags,
+                        artistName(artists))
                 }
             }
             val fixed = if (p.viewUrl.isEmpty() || p.viewUrl == "null") p.copy(viewUrl = p.fileUrl) else p
@@ -284,7 +314,7 @@ object Booru {
         val f = favorites.value
         if (f.isEmpty()) { favFile.delete(); return }
         favFile.writeText(f.joinToString("") { p ->
-            "${p.engine}\t${p.id}\t${p.rating}\t${p.w}\t${p.h}\t${p.ext}\t${p.fileSize}\t${p.thumbUrl}\t${p.viewUrl}\t${p.fileUrl}\t${p.tags.replace('\t', ' ')}\n"
+            "${p.engine}\t${p.id}\t${p.rating}\t${p.w}\t${p.h}\t${p.ext}\t${p.fileSize}\t${p.thumbUrl}\t${p.viewUrl}\t${p.fileUrl}\t${p.tags.replace('\t', ' ')}\t${p.artist.replace('\t', ' ')}\n"
         })
     }
 
@@ -297,7 +327,7 @@ object Booru {
                 val e = f[0].toIntOrNull() ?: return@forEachLine
                 if (e !in 0..2) return@forEachLine
                 list.add(BPost(e, f[1], f[2].firstOrNull() ?: 'g', f[3].toIntOrNull() ?: 0, f[4].toIntOrNull() ?: 0, f[5],
-                    f[6].toLongOrNull() ?: 0, f[7], f[8], f[9], f.getOrElse(10) { "" }))
+                    f[6].toLongOrNull() ?: 0, f[7], f[8], f[9], f.getOrElse(10) { "" }, f.getOrElse(11) { "" }))
             }
         } catch (_: Exception) {}
         favorites.value = list.take(MAX_FAVS)
@@ -325,7 +355,7 @@ object Booru {
     fun send(p0: BPost, sidx: Int, uid: Long) {
         AppScope.launch {
             val res = try {
-                if (p0.engine != SANKAKU) UploadResult(sidx, uid, true, p0.fileUrl) else {
+                if (p0.engine != SANKAKU) UploadResult(sidx, uid, true, chatText(p0.fileUrl, p0)) else {
                     val p = fresh(p0)
                     val original = p.fileSize in 1..8L * 1024 * 1024
                     val url = if (original) p.fileUrl else p.viewUrl
@@ -333,7 +363,7 @@ object Booru {
                     val data = download(p, url).body
                     val ext = urlExt(url).ifEmpty { "jpg" }
                     val mime = when (ext) { "png" -> "image/png"; "webp" -> "image/webp"; "gif" -> "image/gif"; else -> "image/jpeg" }
-                    UploadResult(sidx, uid, true, Uploader.uploadNow(sidx, UploadSource("sankaku_${p.id}.$ext", mime, data.size.toLong()) { data.inputStream() }))
+                    UploadResult(sidx, uid, true, chatText(Uploader.uploadNow(sidx, UploadSource("sankaku_${p.id}.$ext", mime, data.size.toLong()) { data.inputStream() }), p))
                 }
             } catch (e: Exception) {
                 UploadResult(sidx, uid, false, e.message ?: "")

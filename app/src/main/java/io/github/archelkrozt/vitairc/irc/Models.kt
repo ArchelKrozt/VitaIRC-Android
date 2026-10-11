@@ -34,6 +34,7 @@ class Msg(
     var trans: String? = null
     var transState = TransState.NONE
     var reacts: MutableList<React>? = null
+    var replyTo: String? = null         // msgid this message answers (IRCv3 +draft/reply)
 
     val chatty get() = type == MsgType.MSG || type == MsgType.ACTION || type == MsgType.NOTICE
 }
@@ -59,6 +60,7 @@ class Chan(val uid: Long, val type: ChanType, var name: String) {
     var histSince = 0L
     var histEnd = false
     var draft = ""
+    var replyOut: String? = null        // reply of a message waiting for its translation
     var log: java.io.Writer? = null
 
     fun findMsg(id: Long): Msg? = msgs.firstOrNull { it.id == id }

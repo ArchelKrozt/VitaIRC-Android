@@ -1,5 +1,6 @@
 package io.github.archelkrozt.vitairc.ui
 
+import io.github.archelkrozt.vitairc.L.t
 import io.github.archelkrozt.vitairc.data.Config
 import io.github.archelkrozt.vitairc.irc.ChanType
 import io.github.archelkrozt.vitairc.irc.FmtSpan
@@ -19,7 +20,13 @@ data class MsgUi(
     val id: Long, val type: MsgType, val nick: String, val text: String, val spans: List<FmtSpan>,
     val self: Boolean, val time: String, val ts: Long, val highlight: Boolean, val pending: Boolean,
     val trans: String?, val transState: TransState, val reacts: List<ReactUi>, val canReact: Boolean,
-)
+    val msgid: String? = null, val reply: QuoteUi? = null,
+) {
+    val chatty get() = type == MsgType.MSG || type == MsgType.ACTION || type == MsgType.NOTICE
+}
+
+/** What a reply shows of the message it answers (id 0: not in this window any more) */
+data class QuoteUi(val id: Long, val nick: String, val text: String)
 
 data class WinUi(
     val sidx: Int, val uid: Long, val type: ChanType, val name: String, val unread: Int, val mention: Int,
@@ -33,7 +40,7 @@ data class ChanUi(
     val joined: Boolean, val transIn: Boolean, val transOut: Boolean, val transLang: String, val muted: Boolean,
     val loadingOlder: Boolean, val msgs: List<MsgUi>, val draft: String,
     val serverName: String, val host: String, val nick: String, val state: ServerState, val away: Boolean,
-    val myPrefix: Char, val canHistory: Boolean, val filehost: Boolean, val listMask: Boolean,
+    val myPrefix: Char, val canHistory: Boolean, val filehost: Boolean, val listMask: Boolean, val capTags: Boolean,
 )
 
 data class Snapshot(val windows: List<WinUi> = emptyList(), val chan: ChanUi? = null)
@@ -66,10 +73,11 @@ object UiModel {
             c.joined, c.transIn, c.transOut, c.transLang, c.muted, c.histReq == HistReq.BEFORE,
             c.msgs.map { m ->
                 MsgUi(m.id, m.type, m.nick, m.text, m.spans, m.self, m.time, m.ts, m.highlight, m.pending, m.trans, m.transState,
-                    m.reacts?.map { ReactUi(it.emoji, it.count, it.mine) } ?: emptyList(), Irc.canReact(s, m))
+                    m.reacts?.map { ReactUi(it.emoji, it.count, it.mine) } ?: emptyList(), Irc.canReact(s, m), m.msgid,
+                    m.replyTo?.let { r -> c.findMsgId(r)?.let { o -> QuoteUi(o.id, o.nick, o.text) } ?: QuoteUi(0, "", t("mensaje anterior")) })
             },
             c.draft, Config.servers.getOrNull(s.idx)?.name ?: s.cfg.name, s.cfg.host, s.nick.ifEmpty { s.cfg.nick }, s.state, s.away,
-            Irc.myPrefix(s, c), s.capHistory, s.filehost.isNotEmpty(), s.listMask,
+            Irc.myPrefix(s, c), s.capHistory, s.filehost.isNotEmpty(), s.listMask, s.capTags,
         ) else null
         Snapshot(wins, chan)
     }

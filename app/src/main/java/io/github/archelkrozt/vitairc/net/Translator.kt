@@ -29,7 +29,7 @@ object Translator {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > CACHE_MAX
     }
 
-    private class Job(val outgoing: Boolean, val sidx: Int, val uid: Long, val mid: Long, val text: String, val lang: String)
+    private class Job(val outgoing: Boolean, val sidx: Int, val uid: Long, val mid: Long, val text: String, val lang: String, val replyTo: String? = null)
 
     private val jobs = LinkedBlockingDeque<Job>()
     private val cacheFile get() = File(Config.dir, "trcache.txt")
@@ -61,7 +61,7 @@ object Translator {
 
     /** My message: sent translated once ready (or as it was, on error). */
     fun requestOut(s: Server, c: Chan, text: String) {
-        jobs.offerFirst(Job(true, s.idx, c.uid, 0, text, Config.langOut))
+        jobs.offerFirst(Job(true, s.idx, c.uid, 0, text, Config.langOut, Irc.takeReplyOut(c)))
     }
 
     private fun run(j: Job) {
@@ -71,7 +71,7 @@ object Translator {
         try {
             val r = translate(j.text, j.lang, j.outgoing)
             if (j.outgoing) {
-                Irc.sendPrivmsg(j.sidx, j.uid, r.ifEmpty { j.text })
+                Irc.sendPrivmsg(j.sidx, j.uid, r.ifEmpty { j.text }, j.replyTo)
             } else {
                 putCache(key, r)
                 finishIn(j, r)
@@ -79,7 +79,7 @@ object Translator {
         } catch (e: Exception) {
             if (j.outgoing) {
                 AppEvents.toast(t("No se pudo traducir (%s). Enviado sin traducir.").format(e.message ?: t("vacío")))
-                Irc.sendPrivmsg(j.sidx, j.uid, j.text)
+                Irc.sendPrivmsg(j.sidx, j.uid, j.text, j.replyTo)
             } else {
                 finishIn(j, null)
                 AppEvents.toast(t("Traducción: %s").format(e.message ?: ""))

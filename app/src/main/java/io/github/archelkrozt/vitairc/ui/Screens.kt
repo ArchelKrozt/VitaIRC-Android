@@ -214,6 +214,14 @@ fun SettingsScreen() {
     var choose by remember { mutableStateOf<Dlg.Choose?>(null) }
     key(tick) { ScreenScaffold(t("Ajustes"), t("se guardan en %s").format("config.ini")) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            Row(Modifier.fillMaxWidth().clickable { Nav.go(Screen.MyProfile) }.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                AvatarView(try { io.github.archelkrozt.vitairc.irc.MyProfile.avatarBigFile.readBytes() } catch (e: Exception) { io.github.archelkrozt.vitairc.irc.MyProfile.avatar },
+                    Config.servers.firstOrNull()?.nick ?: "?", 48)
+                Column(Modifier.padding(start = 12.dp)) {
+                    Text(io.github.archelkrozt.vitairc.irc.MyProfile.name.ifEmpty { t("Mi perfil") }, color = C.text, fontWeight = FontWeight.SemiBold)
+                    Text(t("Foto, biografía y favoritos públicos"), color = C.dim, fontSize = fontSize(12f))
+                }
+            }
             Section(t("Traducción"))
             Row2(t("Traductor"), Translator.providerName(Config.trProvider)) {
                 choose = Dlg.Choose(t("Traductor"), listOf(Translator.providerName(0), Translator.providerName(1))) { i ->

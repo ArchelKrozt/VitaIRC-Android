@@ -62,6 +62,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.focus.focusRequester
 import androidx.core.content.FileProvider
 import io.github.archelkrozt.vitairc.L.t
 import io.github.archelkrozt.vitairc.data.Config
@@ -343,7 +345,8 @@ private fun MessageList(c: ChanUi, onTap: (MsgUi) -> Unit) {
     Box(Modifier.fillMaxSize()) {
         LazyColumn(state = state, reverseLayout = true, modifier = Modifier.fillMaxSize()) {
             items(rev, key = { it.id }) { m ->
-                MessageRow(m, flash == m.id, { onTap(m) }) { e -> react(c, m, e) }
+                MessageRow(m, flash == m.id, { onTap(m) }, { e -> react(c, m, e) }, onReply = { startReply(c, m) },
+                    onQuote = { id -> Jump.target = c.uid to id })
             }
             if (c.loadingOlder) item(key = "older") {
                 Box(Modifier.fillMaxWidth().padding(8.dp), contentAlignment = Alignment.Center) {
@@ -386,8 +389,21 @@ private fun InputBar(c: ChanUi, openMenu: (String) -> Unit) {
         onDispose { saveDraft(c, field.text) }
     }
     val sugg = completions(c, field.text)
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Social.reply) { if (Social.reply != null) try { focus.requestFocus() } catch (_: Exception) {} }
     Surface(color = C.panel) {
         Column(Modifier.navigationBarsPadding()) {
+            Social.reply?.takeIf { it.sidx == c.sidx && it.uid == c.uid }?.let { r ->
+                Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.AutoMirrored.Filled.Reply, null, tint = C.accent, modifier = Modifier.size(16.dp))
+                    Box(Modifier.padding(horizontal = 8.dp).width(3.dp).height(30.dp).clip(RoundedCornerShape(2.dp)).background(C.nick(r.nick)))
+                    Column(Modifier.weight(1f)) {
+                        Text(t("Respondiendo a %s").format(r.nick), color = C.nick(r.nick), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text(r.text, color = C.dim, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    IconButton({ Social.reply = null }) { Icon(Icons.Filled.Cancel, null, tint = C.faint) }
+                }
+            }
             if (sugg.isNotEmpty()) LazyRow(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(sugg) { n ->
                     AssistChip({
@@ -411,16 +427,25 @@ private fun InputBar(c: ChanUi, openMenu: (String) -> Unit) {
                 val send = {
                     // pasted text with several lines goes out one line at a time
                     val lines = field.text.lines().map { it.trim() }.filter { it.isNotEmpty() }
-                    for (l in lines) {
-                        Sent.add(l)
-                        Irc.userInput(c.sidx, c.uid, l)
+                    // the first line answers the quoted message: with tags as a real reply, otherwise "nick: text"
+                    var reply: String? = null
+                    var prefix = ""
+                    val r = Social.reply
+                    if (r != null && r.sidx == c.sidx && r.uid == c.uid && lines.isNotEmpty()) {
+                        if (c.capTags && r.msgid != null) reply = r.msgid else if (!lines[0].startsWith(r.nick)) prefix = "${r.nick}: "
+                        Social.reply = null
+                    }
+                    for ((i, l) in lines.withIndex()) {
+                        val line = if (i == 0 && !l.startsWith("/")) prefix + l else l
+                        Sent.add(line)
+                        Irc.userInput(c.sidx, c.uid, line, if (i == 0) reply else null)
                     }
                     if (lines.isNotEmpty()) {
                         field = TextFieldValue("")
                         saveDraft(c, "")
                     }
                 }
-                TextField(field, { field = it }, Modifier.weight(1f).onPreviewKeyEvent { e ->
+                TextField(field, { field = it }, Modifier.weight(1f).focusRequester(focus).onPreviewKeyEvent { e ->
                     // a hardware keyboard: Enter sends, Shift+Enter breaks the line
                     if ((e.key == Key.Enter || e.key == Key.NumPadEnter) && !e.isShiftPressed) {
                         if (e.type == KeyEventType.KeyDown) send()
@@ -599,7 +624,8 @@ private fun MessageSheet(c: ChanUi, m: MsgUi, close: () -> Unit) {
         items.add(MenuItem((if (img) t("Ver imagen:") else t("Abrir en el navegador:")) + " " + u, Icons.Filled.Link) { Actions.openLink(u) })
     }
     if (chatty && m.nick.isNotEmpty() && !m.self) {
-        items.add(MenuItem(t("Responder a %s").format(m.nick), Icons.AutoMirrored.Filled.Reply) { appendToInput(c.sidx, c.uid, "${m.nick}: ") })
+        items.add(MenuItem(t("Responder a %s").format(m.nick), Icons.AutoMirrored.Filled.Reply) { startReply(c, m) })
+        items.add(MenuItem(t("Ver perfil y WHOIS de %s").format(m.nick), Icons.Filled.AccountCircle) { Social.card = c.sidx to m.nick })
         items.add(MenuItem(t("Mensaje privado a %s").format(m.nick), Icons.Filled.Person) { Irc.userInput(c.sidx, c.uid, "/query ${m.nick}") })
         val ign = Irc.isIgnored(m.nick)
         items.add(MenuItem((if (ign) t("Dejar de ignorar a %s") else t("Ignorar a %s")).format(m.nick), Icons.Filled.Block) {
@@ -669,7 +695,7 @@ private fun UsersSheet(c: ChanUi, close: () -> Unit) {
     if (u == null) {
         MenuSheet(t("Usuarios del canal (%d)").format(c.users.size), c.users.map { x ->
             MenuItem((if (x.prefix != 0.toChar()) x.prefix.toString() else "") + x.nick + if (x.away) "  (" + t("ausente") + ")" else "",
-                color = if (x.away) C.dim else C.nick(x.nick)) { user = x }
+                color = if (x.away) C.dim else C.nick(x.nick)) { Social.card = c.sidx to x.nick }
         }, close)
         return
     }

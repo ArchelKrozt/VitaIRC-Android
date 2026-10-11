@@ -65,6 +65,9 @@ object Previews {
         }
     }
 
+    /** Animated "GIF" that is really a short video (Imgur's .gifv): plays inline, muted, looping */
+    fun isLoop(url: String) = ext(url) == "gifv"
+
     /** Imgur's .gifv is an MP4 */
     fun videoUrl(url: String) = if (ext(url) == "gifv") url.substringBeforeLast('.') + ".mp4" else url
 

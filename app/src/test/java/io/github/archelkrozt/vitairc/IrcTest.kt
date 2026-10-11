@@ -201,6 +201,86 @@ class IrcTest {
         assertEquals(1, q.msgs.count { it.text == "look $url" })
     }
 
+    @Test fun repliesProfilesWhoisAuthors() {
+        s.state = ServerState.ONLINE
+        s.capTags = true
+        fun out(n: String) = s.outq.any { it.contains(n) } || s.slowq.any { it.contains(n) }
+        // replies: received with the tag, sent with it
+        val c = Irc.locked { Irc.getChan(s, "#vita", ChanType.CHANNEL) }
+        feed("@msgid=m1 :ana!u@h PRIVMSG #vita :¿alguien probó la 1.4?")
+        feed("@msgid=m2;+draft/reply=m1 :bob!u@h PRIVMSG #vita :sí, funciona")
+        assertEquals("m1", c.findMsgId("m2")!!.replyTo)
+        Irc.userInput(0, c.uid, "a mí también", replyTo = "m1")
+        assertTrue(out("@+draft/reply=m1 PRIVMSG #vita :a mí también"))
+        assertEquals("m1", c.msgs.last().replyTo)
+        s.capTags = false; s.outq.clear()
+        Irc.userInput(0, c.uid, "sin etiquetas", replyTo = "m1")
+        assertTrue(out("PRIVMSG #vita :sin etiquetas") && !out("@+draft"))
+        s.capTags = true; s.outq.clear()
+
+        // my profile answers a request, paced, and another app reads it back
+        MyProfile.name = "Diego"
+        MyProfile.bio = "Fan de la Vita 🎮. Programo homebrew y juego en línea con amigos." + " más texto".repeat(20)
+        MyProfile.share = true
+        MyProfile.avatarFile.writeBytes(ByteArray(2500) { (it % 251).toByte() })
+        val fav = io.github.archelkrozt.vitairc.net.BPost(1, "123", 'g', 10, 10, "jpg", 1, "https://cdn.donmai.us/t.jpg", "v", "f", "cat")
+        io.github.archelkrozt.vitairc.net.Booru.toggleFav(fav, null)
+        MyProfile.setPublic(fav.key, true)
+        feed(":ana!u@h PRIVMSG me :\u0001VPROFILE\u0001")
+        val answer = ArrayList(s.slowq)
+        assertTrue(answer.first().startsWith("NOTICE ana :\u0001VPROFILE BEGIN 1") && answer.last().contains("VPROFILE END"))
+        assertTrue(answer.all { it.toByteArray().size <= 512 })
+        feed(":ana!u@h PRIVMSG me :\u0001VPROFILE\u0001")
+        assertEquals(answer.size, s.slowq.size)                 // once every 30 s
+        var got: Profile? = null
+        IrcHooks.profile = { _, _, p -> got = p }
+        Irc.requestProfile(0, "diego")
+        assertTrue(out("PRIVMSG diego :\u0001VPROFILE\u0001"))
+        for (l in answer) feed(":diego!u@h NOTICE me :" + l.substringAfter(':').trimEnd('\r', '\n'))
+        assertEquals("Diego", got!!.name)
+        assertTrue(got!!.bio.startsWith("Fan de la Vita 🎮."))
+        assertEquals(2500, got!!.avatar.size)
+        assertEquals("123", got!!.favs.first().id)
+        assertEquals("https://cdn.donmai.us/t.jpg", got!!.favs.first().thumb)
+        assertNull(Irc.findChan(s, "diego"))
+        assertTrue(s.status.msgs.none { it.text.contains("VPROFILE") })
+        MyProfile.share = false
+        s.profileAnswered.clear(); s.slowq.clear()
+        feed(":ana!u@h PRIVMSG me :\u0001VPROFILE\u0001")
+        assertTrue(s.slowq.size == 1 && s.slowq[0].contains("VPROFILE NONE"))
+        IrcHooks.profile = { _, _, _ -> }
+
+        // WHOIS as a card
+        var card: WhoisInfo? = null
+        IrcHooks.whois = { _, w -> card = w }
+        Irc.whois(0, "ana")
+        val before = s.status.msgs.size
+        feed(":srv 311 me ana ~ana host.example * :Ana López")
+        feed(":srv 319 me ana :@#vita #henkaku")
+        feed(":srv 312 me ana tantalum.libera.chat :Libera")
+        feed(":srv 317 me ana 125 1791415800 :seconds idle, signon time")
+        feed(":srv 330 me ana anaacct :is logged in as")
+        feed(":srv 671 me ana :is using a secure connection")
+        feed(":srv 338 me ana 2001:db8::1 :actually using host")
+        feed(":srv 318 me ana :End of /WHOIS list.")
+        assertEquals("2001:db8::1", card!!.actualHost)
+        assertEquals("Ana López", card!!.realname)
+        assertEquals(listOf("@#vita", "#henkaku"), card!!.channels)
+        assertTrue(card!!.idleSecs == 125 && card!!.account == "anaacct" && card!!.secure)
+        assertEquals(before, s.status.msgs.size)
+        Irc.whois(0, "ghost")
+        feed(":srv 401 me ghost :No such nick/channel")
+        assertTrue(card!!.nick == "ghost" && !card!!.found)
+        IrcHooks.whois = { _, _ -> }
+
+        // image authors
+        val dan = io.github.archelkrozt.vitairc.net.Booru.parse(1, """[{"id":7,"rating":"g","image_width":1,"image_height":1,"file_ext":"png","file_size":5,"preview_file_url":"https://t","large_file_url":"https://l","file_url":"https://f","tag_string":"cat","tag_string_artist":"foo_bar banned_artist"}]""", false)
+        assertEquals("foo bar", dan.first[0].artist)
+        assertEquals("https://f 🎨 foo bar", io.github.archelkrozt.vitairc.net.Booru.chatText("https://f", dan.first[0]))
+        val sk = io.github.archelkrozt.vitairc.net.Booru.parse(2, """{"data":[{"id":"9","rating":"s","width":1,"height":1,"file_ext":"jpg","file_size":5,"sample_url":"https://s","file_url":"https://f","tags":[{"tagName":"cat","type":0},{"tagName":"some_artist","type":1}]}],"meta":{"next":null}}""", false)
+        assertEquals("some artist", sk.first[0].artist)
+    }
+
     @Test fun historyRoundTrip() {
         s.state = ServerState.ONLINE
         val logDir = File(dir, "logs/bnc.example").apply { mkdirs() }

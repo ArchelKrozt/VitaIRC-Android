@@ -63,6 +63,16 @@ class App : Application(), ImageLoaderFactory {
         IrcHooks.notify = { s: Server, c, m -> Notifier.message(s, c, m) }
         IrcHooks.toast = { AppEvents.toast(it) }
         IrcHooks.beep = { Notifier.beep() }
+        val main = android.os.Handler(mainLooper)
+        IrcHooks.profile = { sidx, nick, p ->
+            main.post {
+                val k = io.github.archelkrozt.vitairc.ui.userKey(sidx, nick)
+                if (p != null) { io.github.archelkrozt.vitairc.ui.Social.profiles[k] = p; io.github.archelkrozt.vitairc.ui.Social.failed.remove(k) }
+                else io.github.archelkrozt.vitairc.ui.Social.failed[k] = true
+            }
+        }
+        IrcHooks.whois = { sidx, w -> main.post { io.github.archelkrozt.vitairc.ui.Social.whois[io.github.archelkrozt.vitairc.ui.userKey(sidx, w.nick)] = w } }
+        io.github.archelkrozt.vitairc.irc.MyProfile.load()
 
         UiModel.start()
         Translator.start()
